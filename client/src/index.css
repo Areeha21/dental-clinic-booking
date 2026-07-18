@@ -1,1 +1,16 @@
 @import "tailwindcss";
+
+@theme {
+  /* Custom color names — use these as bg-navy, text-skyblue, etc. anywhere in JSX */
+  --color-navy: #0a2540;      /* dark blue — headings, navbar, primary buttons */
+  --color-skyblue: #4a90d9;   /* light blue — accents, hover states, highlights */
+  --color-offwhite: #f7f9fc;  /* soft white — section backgrounds */
+  --color-charcoal: #1a1a1a;  /* near-black — body text */
+
+  --font-sans: "Poppins", sans-serif;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-charcoal);
+}
