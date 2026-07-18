@@ -1,13 +1,39 @@
 const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
+const sendEmail = require('../utils/sendEmail');
+const {
+  appointmentPendingTemplate,
+  appointmentConfirmedTemplate,
+  appointmentRejectedTemplate,
+  appointmentCancelledTemplate,
+  appointmentCompletedTemplate,
+} = require('../utils/emailTemplates');
 
-// Helper: add minutes to a "HH:mm" string, returns a new "HH:mm" string
 const addMinutesToTime = (startTime, durationMinutes) => {
   const [hours, minutes] = startTime.split(':').map(Number);
   const totalMinutes = hours * 60 + minutes + durationMinutes;
   const endHours = Math.floor(totalMinutes / 60) % 24;
   const endMinutes = totalMinutes % 60;
   return `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
+};
+
+// Maps a status to its email template function
+const templateForStatus = {
+  pending: appointmentPendingTemplate,
+  confirmed: appointmentConfirmedTemplate,
+  rejected: appointmentRejectedTemplate,
+  cancelled: appointmentCancelledTemplate,
+  completed: appointmentCompletedTemplate,
+};
+
+// Sends the right email for a given appointment + status, if a template exists for it.
+// Appointment must already be populated with patient, doctor, and service.
+const notifyStatusChange = async (appointment, status) => {
+  const templateFn = templateForStatus[status];
+  if (!templateFn) return; // no email defined for this status (e.g. "rescheduled")
+
+  const { subject, html } = templateFn(appointment);
+  await sendEmail({ to: appointment.patient.email, subject, html });
 };
 
 // POST /api/appointments — patient books an appointment
@@ -19,7 +45,6 @@ const createAppointment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Doctor, service, date, and time are required', data: {} });
     }
 
-    // Rule: cannot book a date in the past
     const requestedDate = new Date(appointmentDate);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -34,8 +59,8 @@ const createAppointment = async (req, res) => {
 
     const endTime = addMinutesToTime(startTime, serviceDoc.durationMinutes);
 
-    const appointment = await Appointment.create({
-      patient: req.user.id, // comes from the JWT via the `protect` middleware
+    let appointment = await Appointment.create({
+      patient: req.user.id,
       doctor,
       service,
       appointmentDate: requestedDate,
@@ -45,10 +70,12 @@ const createAppointment = async (req, res) => {
       statusHistory: [{ status: 'pending', changedBy: req.user.id }],
     });
 
+    // Populate before emailing so the template has patient name/email, doctor name, service name
+    appointment = await appointment.populate(['patient', 'doctor', 'service']);
+    await notifyStatusChange(appointment, 'pending');
+
     res.status(201).json({ success: true, message: 'Appointment request submitted successfully', data: appointment });
   } catch (error) {
-    // The unique compound index on the Appointment model throws this specific
-    // error code when the doctor + date + time slot is already taken.
     if (error.code === 11000) {
       return res.status(409).json({ success: false, message: 'This time slot is already booked for this doctor', data: {} });
     }
@@ -56,7 +83,6 @@ const createAppointment = async (req, res) => {
   }
 };
 
-// GET /api/appointments/my — patient views only their own appointments
 const getMyAppointments = async (req, res) => {
   try {
     const appointments = await Appointment.find({ patient: req.user.id })
@@ -69,15 +95,13 @@ const getMyAppointments = async (req, res) => {
   }
 };
 
-// PATCH /api/appointments/:id/cancel — patient cancels their own appointment
 const cancelMyAppointment = async (req, res) => {
   try {
-    const appointment = await Appointment.findById(req.params.id);
+    let appointment = await Appointment.findById(req.params.id).populate(['patient', 'doctor', 'service']);
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found', data: {} });
     }
-    // Ownership check — patients can only cancel their own appointments
-    if (appointment.patient.toString() !== req.user.id) {
+    if (appointment.patient._id.toString() !== req.user.id) {
       return res.status(403).json({ success: false, message: 'You can only cancel your own appointments', data: {} });
     }
     if (['completed', 'cancelled', 'rejected'].includes(appointment.status)) {
@@ -89,13 +113,14 @@ const cancelMyAppointment = async (req, res) => {
     appointment.statusHistory.push({ status: 'cancelled', changedBy: req.user.id });
     await appointment.save();
 
+    await notifyStatusChange(appointment, 'cancelled');
+
     res.status(200).json({ success: true, message: 'Appointment cancelled', data: appointment });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to cancel appointment', data: { error: error.message } });
   }
 };
 
-// GET /api/admin/appointments — admin views all, with optional filters
 const getAllAppointments = async (req, res) => {
   try {
     const { date, doctor, service, status } = req.query;
@@ -127,7 +152,7 @@ const updateAppointmentStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid status value', data: {} });
     }
 
-    const appointment = await Appointment.findById(req.params.id);
+    let appointment = await Appointment.findById(req.params.id).populate(['patient', 'doctor', 'service']);
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found', data: {} });
     }
@@ -143,7 +168,7 @@ const updateAppointmentStatus = async (req, res) => {
     appointment.statusHistory.push({ status, changedBy: req.user.id });
     await appointment.save();
 
-    // Email notification would be triggered here (Day 6 — Nodemailer)
+    await notifyStatusChange(appointment, status);
 
     res.status(200).json({ success: true, message: `Appointment ${status}`, data: appointment });
   } catch (error) {
