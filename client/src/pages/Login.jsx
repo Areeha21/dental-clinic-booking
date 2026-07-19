@@ -1,3 +1,4 @@
+import loginImage from '../assets/hero.jpg';
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../services/api';
@@ -32,7 +33,10 @@ function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-offwhite">
+    <div
+  className="min-h-screen bg-cover bg-top"
+  style={{ backgroundImage: `url(${loginImage})` }}
+>
       <Navbar />
       <div className="flex justify-center items-center py-16 px-6">
         <form
