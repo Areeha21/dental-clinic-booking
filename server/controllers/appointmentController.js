@@ -17,7 +17,6 @@ const addMinutesToTime = (startTime, durationMinutes) => {
   return `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
 };
 
-// Maps a status to its email template function
 const templateForStatus = {
   pending: appointmentPendingTemplate,
   confirmed: appointmentConfirmedTemplate,
@@ -26,17 +25,20 @@ const templateForStatus = {
   completed: appointmentCompletedTemplate,
 };
 
-// Sends the right email for a given appointment + status, if a template exists for it.
-// Appointment must already be populated with patient, doctor, and service.
-const notifyStatusChange = async (appointment, status) => {
+// IMPORTANT: this is intentionally NOT awaited by the callers below.
+// Sending an email can take a few seconds (or fail entirely), and the
+// user booking an appointment shouldn't have to wait on that — the booking
+// itself is already saved in the database by the time this runs.
+const notifyStatusChange = (appointment, status) => {
   const templateFn = templateForStatus[status];
-  if (!templateFn) return; // no email defined for this status (e.g. "rescheduled")
+  if (!templateFn) return;
 
   const { subject, html } = templateFn(appointment);
-  await sendEmail({ to: appointment.patient.email, subject, html });
+  // No `await` here on purpose — fire and forget. Errors are handled
+  // and logged inside sendEmail itself, so this can't crash anything.
+  sendEmail({ to: appointment.patient.email, subject, html });
 };
 
-// POST /api/appointments — patient books an appointment
 const createAppointment = async (req, res) => {
   try {
     const { doctor, service, appointmentDate, startTime, reason } = req.body;
@@ -70,11 +72,13 @@ const createAppointment = async (req, res) => {
       statusHistory: [{ status: 'pending', changedBy: req.user.id }],
     });
 
-    // Populate before emailing so the template has patient name/email, doctor name, service name
     appointment = await appointment.populate(['patient', 'doctor', 'service']);
-    await notifyStatusChange(appointment, 'pending');
 
+    // Respond to the user immediately — the booking is already saved.
     res.status(201).json({ success: true, message: 'Appointment request submitted successfully', data: appointment });
+
+    // Email sends after the response, in the background.
+    notifyStatusChange(appointment, 'pending');
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ success: false, message: 'This time slot is already booked for this doctor', data: {} });
@@ -113,9 +117,9 @@ const cancelMyAppointment = async (req, res) => {
     appointment.statusHistory.push({ status: 'cancelled', changedBy: req.user.id });
     await appointment.save();
 
-    await notifyStatusChange(appointment, 'cancelled');
-
     res.status(200).json({ success: true, message: 'Appointment cancelled', data: appointment });
+
+    notifyStatusChange(appointment, 'cancelled');
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to cancel appointment', data: { error: error.message } });
   }
@@ -142,7 +146,6 @@ const getAllAppointments = async (req, res) => {
   }
 };
 
-// PATCH /api/admin/appointments/:id/status — admin confirms, rejects, reschedules, or completes
 const updateAppointmentStatus = async (req, res) => {
   try {
     const { status, cancellationReason, appointmentDate, startTime } = req.body;
@@ -168,9 +171,9 @@ const updateAppointmentStatus = async (req, res) => {
     appointment.statusHistory.push({ status, changedBy: req.user.id });
     await appointment.save();
 
-    await notifyStatusChange(appointment, status);
-
     res.status(200).json({ success: true, message: `Appointment ${status}`, data: appointment });
+
+    notifyStatusChange(appointment, status);
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to update appointment status', data: { error: error.message } });
   }
