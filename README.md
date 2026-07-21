@@ -91,3 +91,7 @@ npm run dev
 - Only administrators can confirm, reject, reschedule, or complete appointments  
 - Cancelled slots become available again automatically (the index only blocks active statuses)  
 - All appointment status changes trigger an email notification to the patient  
+
+## Important Note
+
+This repository does **not include a demo video**. Instead, functionality is demonstrated through documentation and screenshots located in the `docs/screenshots/` folder.
